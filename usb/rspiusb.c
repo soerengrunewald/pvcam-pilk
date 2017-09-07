@@ -699,8 +699,7 @@ static int get_pixel_data(struct device_extension *pdx)
 }
 #endif
 
-static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
-		ioctl_struct *arg)
+static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx, void __user *to)
 {
 	unsigned char *uBuf;
 	int numbytes;
@@ -715,6 +714,8 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 	dbg("numbytes to read = %d", numbytes);
 
 	// FIXME: why reading this data? is it sent? left-over from piusb_write_bulk()?
+	// -> no it is nessessary, cause ctrl->pData is a pointer from userspace and
+	//    we copied the pointer address with our first copy
 	if (copy_from_user(uBuf, ctrl->pData, numbytes)) {
 		dbg("copying ctrl->pData to uBuf failed");
 		kfree(uBuf);
@@ -732,13 +733,18 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 		kfree(uBuf);
 		return ret;
 	}
-	dbg("EP Read %d bytes", numbytes);
 
-	memcpy(ctrl->pData, uBuf, numbytes);
+	dbg("EP Read %d bytes", numbytes);
+	if (copy_to_user(ctrl->pData, uBuf, numbytes)) {
+		dbg("copy_to_user failed");
+		kfree(uBuf);
+		return -EFAULT;
+	}
+
 	dbg("Total Bytes Read from EP[%d] = %d", ctrl->endpoint, numbytes);
 	ctrl->numbytes = numbytes;
 
-	if (copy_to_user(arg, ctrl, sizeof(ioctl_struct))) {
+	if (copy_to_user(to, ctrl, sizeof(ioctl_struct))) {
 		dbg("copy_to_user failed in IORB");
 		kfree(uBuf);
 		return -EFAULT;
@@ -748,20 +754,23 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx,
 	return ctrl->numbytes;
 }
 
-
 // TODO: add a piusb_compat_ioctl to support 32 bits calls on 64 bits. It's
 // mainly about reading/writing the ioctl_struct in 32 bits.
 static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct device_extension *pdx;
+	struct device_extension *pdx = (struct device_extension *)file->private_data;
 	char dummyCtlBuf[] = {0,0,0,0,0,0,0,0};
-	u16 devRB=0;
-	int err = 0;
-	long retval = 0;
-	ioctl_struct ctrl;
+	const size_t cs = _IOC_SIZE(cmd);
 	unsigned short controlData;
+	ioctl_struct *ctrl = NULL;
+	long retval = -ENOTTY;
+	u16 devRB = 0;
+	int err = 0;
+	u8 buf[64];
 
-	pdx = (struct device_extension *)file->private_data;
+	if (!pdx)
+		return -EINVAL;
+
 	mutex_lock(&pdx->mutex);
 	/* verify that the device wasn't unplugged */
 	if (!pdx->present) {
@@ -773,32 +782,51 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 	}
 
 	/* check the ioctl struct can be read/written */
+	if (_IOC_TYPE(cmd) != PIUSB_MAGIC)
+		goto done;
+
 	if(_IOC_DIR(cmd) & _IOC_READ)
 		err = !access_ok(VERIFY_WRITE, (void __user *)arg, _IOC_SIZE(cmd));
 	else if (_IOC_DIR(cmd) & _IOC_WRITE)
 		err = !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
-	if( err ) {
+	if (err) {
 		dev_err(&pdx->udev->dev, "fail to access ioctl data. error = %d\n", err);
 		retval = -EFAULT;
 		goto done;
 	}
 
-	switch (cmd) {
-	case PIUSB_GETVNDCMD:
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
+	if (cs > sizeof(*ctrl)) {
+		dev_err(&pdx->udev->dev, "Can't handle requested size %zd <> %zd\n",
+			cs, sizeof(*ctrl));
+		retval = -EFAULT;
+		goto done;
+	}
+
+	if (cs == sizeof(*ctrl)) {
+		/* FIXME: don't know why, but the passed data is larger then
+		 *        the ioctl_struct */
+		const size_t copy = cs + 4;
+		if (copy_from_user(buf, (void __user*)arg, copy)) {
 			pr_info("copy_from_user failed\n");
 			retval = -EFAULT;
 			goto done;
 		}
-		dbg("Get Vendor Command = %x, pData = %p", ctrl.cmd, ctrl.pData);
-		if (ctrl.numbytes != sizeof(devRB)) {
-			dev_err(&pdx->udev->dev, "GETVNDCMD numbytes should be 2, but is %lu\n", ctrl.numbytes);
+
+		ctrl = (ioctl_struct *)&buf[0];
+	}
+
+	switch (cmd) {
+	case PIUSB_GETVNDCMD:
+		dbg("Get Vendor Command = %x, pData = %p", ctrl->cmd, ctrl->pData);
+		if (ctrl->numbytes != sizeof(devRB)) {
+			dev_err(&pdx->udev->dev, "GETVNDCMD numbytes should be 2, but is %lu\n",
+				ctrl->numbytes);
 			retval = -EINVAL;
 			goto done;
 		}
 		retval = usb_control_msg(pdx->udev, usb_rcvctrlpipe(pdx->udev, 0),
-					ctrl.cmd, USB_DIR_IN, 0, 0, &devRB, ctrl.numbytes, HZ*10);
-		if (ctrl.cmd == 0xF1)
+					ctrl->cmd, USB_DIR_IN, 0, 0, &devRB, ctrl->numbytes, HZ*10);
+		if (ctrl->cmd == 0xF1)
 			dbg( "FW Version returned from HW = %d.%d", (devRB>>8), (devRB&0xFF) );
 		// FIXME: the user-space lib doesn't seem much happy with the value
 		// returned for the FW version (states it's unsupported). Maybe it's
@@ -808,29 +836,29 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_SETVNDCMD:
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
-			pr_info("copy_from_user failed\n");
-			retval = -EFAULT;
+		retval = get_user(controlData, ctrl->pData);
+		if (retval < 0) {
+			pr_err("copy_from_user failed\n");
 			goto done;
 		}
-		controlData = (ctrl.pData[1] << 8) | ctrl.pData[0];
-		dbg( "Set Vendor Command = %x -> %d", ctrl.cmd, controlData);
+		dbg("Set Vendor Command = 0x%x -> %d", ctrl->cmd, controlData);
 
 		// TODO: not clear whether ctrl.numbytes is supposed to be the size of
 		// ctrl.pData or the amount of extra (null) data to send. My guess
 		// is that it's related to ctrl.pData (and it's possible to send no
 		// data at all, ie, *data=NULL) but for safety, keep sending null data.
-		if (ctrl.numbytes > ARRAY_SIZE(dummyCtlBuf)) {
-			dev_err(&pdx->udev->dev, "SETVNDCMD numbytes bigger than possible: %lu\n", ctrl.numbytes);
+		if (ctrl->numbytes > ARRAY_SIZE(dummyCtlBuf)) {
+			dev_err(&pdx->udev->dev, "SETVNDCMD numbytes bigger than possible: %lu\n",
+				ctrl->numbytes);
 			retval = -EINVAL;
 			goto done;
 		}
-
-		retval = usb_control_msg(pdx->udev, usb_sndctrlpipe(pdx->udev, 0),
-						ctrl.cmd,
-						(USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
-						controlData, 0, dummyCtlBuf, ctrl.numbytes, HZ*10);
-		dbg( "control msg returned %ld", retval);
+		retval = usb_control_msg(pdx->udev,
+					 usb_sndctrlpipe(pdx->udev, 0),
+					 ctrl->cmd,
+					 (USB_DIR_OUT | USB_TYPE_VENDOR ),/* | USB_RECIP_ENDPOINT), */
+					 controlData, 0,
+					 dummyCtlBuf, ctrl->numbytes, HZ*10);
 		break;
 
 	case PIUSB_ISHIGHSPEED:
@@ -838,50 +866,28 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_WRITEPIPE:
-		dbg("WRITEPIPE");
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
-			pr_info("copy_from_user failed\n");
-			retval = -EFAULT;
-			goto done;
-		}
-		if( !access_ok(VERIFY_READ, ctrl.pData, ctrl.numbytes)) {
-			dbg("can't access pData" );
-			retval = -EFAULT;
-			goto done;
-		}
 		// TODO: shall we care about pendingWrite?
-		retval = piusb_write_bulk(&ctrl, ctrl.pData, ctrl.numbytes, pdx);
+		retval = piusb_write_bulk(ctrl, ctrl->pData, ctrl->numbytes, pdx);
 		break;
 
 	case PIUSB_USERBUFFER:
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
-			pr_info("copy_from_user failed\n");
-			retval = -EFAULT;
-			goto done;
-		}
-		retval = MapUserBuffer(&ctrl, pdx);
+		retval = MapUserBuffer(ctrl, pdx);
 		break;
 
 	case PIUSB_UNMAP_USERBUFFER:
-		dbg("unmapping buffer");
 		retval = UnMapUserBuffer(pdx);
 		break;
 
 	case PIUSB_READPIPE:
 		/* Called to receive data from the camera */
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
-			pr_info("copy_from_user failed\n");
-			retval = -EFAULT;
-			goto done;
-		}
-		dbg("READPIPE %d", ctrl.endpoint);
+		dbg("Endpoint = 0x%x", ctrl->endpoint);
 
 		/* Depending on the camera, endpoints have different meanings */
 		if (pdx->iama == PIXIS_PID) {
-			switch(ctrl.endpoint) {
+			switch (ctrl->endpoint) {
 			case 0: // PIXIS IO EP0
 			case 4: // PIXIS IO EP4
-				retval = piusb_read_io(&ctrl, pdx, (ioctl_struct *)arg);
+				retval = piusb_read_io(ctrl, pdx, (void __user *)arg);
 				break;
 			case 2://PIXIS Ping
 			case 3://PIXIS Pong
@@ -892,12 +898,12 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 				break;
 			}
 		} else { /* ST133 */
-			switch(ctrl.endpoint) {
+			switch (ctrl->endpoint) {
 			case 0://ST133 Pixel Data
 				retval = get_pixel_data(pdx);
 				break;
 			case 1://ST133 IO
-				retval = piusb_read_io(&ctrl, pdx, (ioctl_struct *)arg);
+				retval = piusb_read_io(ctrl, pdx, (void __user *)arg);
 				break;
 			default:
 				retval = -EINVAL;
@@ -911,20 +917,15 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_SETFRAMESIZE:
-		if (copy_from_user(&ctrl, (void __user*)arg, sizeof(ioctl_struct))) {
-			pr_info("copy_from_user failed\n");
-			retval = -EFAULT;
-			goto done;
-		}
 		/* don't allow to change it after it has already been allocated */
 		if (pdx->PixelUrb) {
 			dev_err(&pdx->udev->dev, "SETFRAMESIZE called while buffer is still mapped\n");
 			retval = -EINVAL;
 			goto done;
 		}
-		dbg("SETFRAMESIZE to %dx%lu", ctrl.numFrames, ctrl.numbytes);
+		dbg("setting frame size to %dx%lu", ctrl->numFrames, ctrl->numbytes);
 
-		if ((pdx->iama == PIXIS_PID) && (ctrl.numFrames % 2)) {
+		if ((pdx->iama == PIXIS_PID) && (ctrl->numFrames % 2)) {
 			/*
 			 * The PIXIS uses a ping-pong scheme, which means we
 			 * need to have a even number of buffer (or we would
@@ -935,31 +936,31 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 			// might need to look out for Set Vendor Command = f0.
 			dev_warn(&pdx->udev->dev, "PIXIS needs an even number of "
 				 "frame buffers, it will not work past %d frames\n",
-				 ctrl.numFrames);
+				 ctrl->numFrames);
 		}
 
-		pdx->frameSize = ctrl.numbytes;
-		pdx->num_frames = ctrl.numFrames;
+		pdx->frameSize = ctrl->numbytes;
+		pdx->num_frames = ctrl->numFrames;
 		pdx->active_frame = 0;
 
 		/* the checks shouldn't be necessary, but it makes sure there is no leak */
-		if( !pdx->sgl )
-			pdx->sgl = kmalloc( sizeof ( struct scatterlist *) * pdx->num_frames, GFP_KERNEL );
-		if( !pdx->sgEntries )
-			pdx->sgEntries = kmalloc( sizeof( unsigned int ) * pdx->num_frames, GFP_KERNEL );
-		if( !pdx->PixelUrb )
-			pdx->PixelUrb = kmalloc( sizeof( struct urb **) * pdx->num_frames, GFP_KERNEL );
-		if( !pdx->maplist_numPagesMapped )
-			pdx->maplist_numPagesMapped = vmalloc( sizeof( unsigned int ) * pdx->num_frames );
-		if( !pdx->pendedPixelUrbs )
-			pdx->pendedPixelUrbs = kmalloc( sizeof( char *) * pdx->num_frames, GFP_KERNEL );
-		if( !pdx->user_buffer)
-			pdx->user_buffer = kmalloc( sizeof(unsigned char *) * pdx->num_frames, GFP_KERNEL );
+		if (!pdx->sgl)
+			pdx->sgl = kmalloc(sizeof(struct scatterlist *) * pdx->num_frames, GFP_KERNEL);
+		if (!pdx->sgEntries)
+			pdx->sgEntries = kmalloc(sizeof(unsigned int) * pdx->num_frames, GFP_KERNEL);
+		if (!pdx->PixelUrb)
+			pdx->PixelUrb = kmalloc(sizeof(struct urb **) * pdx->num_frames, GFP_KERNEL);
+		if (!pdx->maplist_numPagesMapped)
+			pdx->maplist_numPagesMapped = vmalloc(sizeof(unsigned int) * pdx->num_frames);
+		if (!pdx->pendedPixelUrbs )
+			pdx->pendedPixelUrbs = kmalloc(sizeof(char *) * pdx->num_frames, GFP_KERNEL);
+		if (!pdx->user_buffer)
+			pdx->user_buffer = kmalloc(sizeof(unsigned char *) * pdx->num_frames, GFP_KERNEL);
 		break;
 
 	default:
 		/* return that we did not understand this ioctl call */
-		dbg( "%s\n", "No IOCTL found" );
+		dbg("Unsupported IOCTL");
 		retval = -ENOTTY;
 		break;
 	}
