@@ -89,7 +89,7 @@ static void piusb_write_bulk_callback(struct urb *urb)
  * bulk endpoints (eg: on the PIXIS 1 or 8). It asynchronous.
  * Returns the number of bytes written (sent).
  */
-int piusb_write_bulk(ioctl_struct *io, unsigned char *uBuf, int len, struct device_extension *pdx)
+static int piusb_write_bulk(ioctl_struct *io, unsigned char *uBuf, int len, struct device_extension *pdx)
 {
 	struct urb *urb = NULL;
 	int retval = 0;
@@ -184,7 +184,7 @@ static void piusb_read_pixel_callback ( struct urb *urb )
  * camera (by killing the URB, which will prevent the callback from resubmitting
  * it).
  */
-int UnMapUserBuffer( struct device_extension *pdx )
+static int UnMapUserBuffer( struct device_extension *pdx )
 {
 	int i, k;
 	unsigned int epAddr;
@@ -250,7 +250,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
   the user buffer uses.  We then build an URB for each DMA address and then submit them.
 */
 //int MapUserBuffer( unsigned long uaddr, unsigned long numbytes, unsigned long frameInfo, struct device_extension *pdx )
-int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
+static int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 {
 	unsigned long uaddr;
 	unsigned long numbytes;
@@ -477,7 +477,7 @@ static void piusb_read_pixel_callback ( struct urb *urb )
  * it's called UnMapUserBuffer, but actually this implementation just frees the
  * kernel buffer.
  */
-int UnMapUserBuffer( struct device_extension *pdx )
+static int UnMapUserBuffer( struct device_extension *pdx )
 {
 	int i = 0;
 	int k = 0;
@@ -538,7 +538,7 @@ int UnMapUserBuffer( struct device_extension *pdx )
  * and allocates kernel memory of the same size to receive the camera data. It
  * also starts requesting data from the camera by setting up URBs.
  */
-int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
+static int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 {
 	unsigned long numbytes = io->numbytes; // length of the buffer
 	int f = io->numFrames; // which frame we're mapping
