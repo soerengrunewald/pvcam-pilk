@@ -49,7 +49,7 @@
 #endif
 /* Use our own dbg macro */
 #undef dbg
-#define dbg(format, arg...) do { if (debug) printk(KERN_DEBUG "rspiusb: " format "\n" , ## arg); } while (0)
+#define dbg(format, arg...) do { if (debug) printk(KERN_NOTICE "rspiusb: " format "\n" , ## arg); } while (0)
 
 // Reenable to use the userspace <-> kernel DMA mapping (that currently doesn't work)
 //#define USE_DMA_MAPPING
