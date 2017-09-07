@@ -51,7 +51,7 @@
 //#define USE_DMA_MAPPING
 
 /* Version Information */
-#define DRIVER_VERSION "V1.0.3"
+#define DRIVER_VERSION "1.0.3"
 #define DRIVER_DESC "PI USB2.0 Device Driver for Linux"
 
 static struct usb_driver piusb_driver;
@@ -1217,7 +1217,7 @@ static int __init piusb_init(void)
 			": usb_register failed. Error number %d\n",
 			result);
 	else
-		printk(KERN_INFO KBUILD_MODNAME ": %s %s\n", DRIVER_DESC, DRIVER_VERSION);
+		printk(KERN_INFO KBUILD_MODNAME ": %s v%s\n", DRIVER_DESC, DRIVER_VERSION);
 	return result;
 }
 
@@ -1236,4 +1236,5 @@ MODULE_PARM_DESC(debug, "Log debug information");
 
 MODULE_AUTHOR("Princeton Instruments");
 MODULE_DESCRIPTION(DRIVER_DESC);
+MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL v2");
