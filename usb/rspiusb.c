@@ -758,6 +758,17 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx, void 
 	return ctrl->numbytes;
 }
 
+static void dump(const ioctl_struct *s)
+{
+	dbg("   ioctl: %p", s);
+	dbg("    +-- cmd:........ %d", s->cmd);
+	dbg("    +-- numbytes:... %lu", s->numbytes);
+	dbg("    +-- dir:........ %d", s->dir);
+	dbg("    +-- endpoint:... %d", s->endpoint);
+	dbg("    +-- numFrames:.. %d", s->numFrames);
+	dbg("    +-- pData:...... %p", s->pData);
+}
+
 // TODO: add a piusb_compat_ioctl to support 32 bits calls on 64 bits. It's
 // mainly about reading/writing the ioctl_struct in 32 bits.
 static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
@@ -774,6 +785,9 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 
 	if (!pdx)
 		return -EINVAL;
+
+	dbg("> %s(file=..., cmd=0x%x, arg=...)", __func__, cmd);
+	dbg("   command size=%zd", cs);
 
 	mutex_lock(&pdx->mutex);
 	/* verify that the device wasn't unplugged */
@@ -810,6 +824,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		/* FIXME: don't know why, but the passed data is larger then
 		 *        the ioctl_struct */
 		const size_t copy = cs + 4;
+		dbg("   copy_from_user(..., size=%zd)", copy);
 		if (copy_from_user(buf, (void __user*)arg, copy)) {
 			pr_info("copy_from_user failed\n");
 			retval = -EFAULT;
@@ -817,10 +832,12 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		}
 
 		ctrl = (ioctl_struct *)&buf[0];
+		dump(ctrl);
 	}
 
 	switch (cmd) {
 	case PIUSB_GETVNDCMD:
+		dbg("   * PIUSB_GETVNDCMD");
 		dbg("Get Vendor Command = %x, pData = %p", ctrl->cmd, ctrl->pData);
 		if (ctrl->numbytes != sizeof(devRB)) {
 			dev_err(&pdx->udev->dev, "GETVNDCMD numbytes should be 2, but is %lu\n",
@@ -840,12 +857,13 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_SETVNDCMD:
+		dbg("   * PIUSB_SETVNDCMD");
 		retval = get_user(controlData, ctrl->pData);
 		if (retval < 0) {
 			pr_err("copy_from_user failed\n");
 			goto done;
 		}
-		dbg("Set Vendor Command = 0x%x -> %d", ctrl->cmd, controlData);
+		dbg("     Set Vendor Command = 0x%x -> %d", ctrl->cmd, controlData);
 
 		// TODO: not clear whether ctrl.numbytes is supposed to be the size of
 		// ctrl.pData or the amount of extra (null) data to send. My guess
@@ -866,25 +884,30 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_ISHIGHSPEED:
+		dbg("   * PIUSB_ISHIGHSPEED");
 		retval = (pdx->udev->speed == USB_SPEED_HIGH) ? 1 : 0;
 		break;
 
 	case PIUSB_WRITEPIPE:
+		dbg("   * PIUSB_WRITEPIPE");
 		// TODO: shall we care about pendingWrite?
 		retval = piusb_write_bulk(ctrl, ctrl->pData, ctrl->numbytes, pdx);
 		break;
 
 	case PIUSB_USERBUFFER:
+		dbg("   * PIUSB_USERBUFFER");
 		retval = MapUserBuffer(ctrl, pdx);
 		break;
 
 	case PIUSB_UNMAP_USERBUFFER:
+		dbg("   * PIUSB_UNMAP_USERBUFFER");
 		retval = UnMapUserBuffer(pdx);
 		break;
 
 	case PIUSB_READPIPE:
+		dbg("   * PIUSB_READPIPE");
 		/* Called to receive data from the camera */
-		dbg("Endpoint = 0x%x", ctrl->endpoint);
+		dbg("      endpoint = 0x%x", ctrl->endpoint);
 
 		/* Depending on the camera, endpoints have different meanings */
 		if (pdx->iama == PIXIS_PID) {
@@ -917,17 +940,19 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case PIUSB_WHATCAMERA:
+		dbg("   * PIUSB_WHATCAMERA");
 		retval = pdx->iama;
 		break;
 
 	case PIUSB_SETFRAMESIZE:
+		dbg("   * PIUSB_SETFRAMESIZE");
 		/* don't allow to change it after it has already been allocated */
 		if (pdx->PixelUrb) {
 			dev_err(&pdx->udev->dev, "SETFRAMESIZE called while buffer is still mapped\n");
 			retval = -EINVAL;
 			goto done;
 		}
-		dbg("setting frame size to %dx%lu", ctrl->numFrames, ctrl->numbytes);
+		dbg("      setting frame size to %dx%lu", ctrl->numFrames, ctrl->numbytes);
 
 		if ((pdx->iama == PIXIS_PID) && (ctrl->numFrames % 2)) {
 			/*
@@ -964,13 +989,14 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 
 	default:
 		/* return that we did not understand this ioctl call */
-		dbg("Unsupported IOCTL");
+		dbg("   * Unsupported IOCTL 0x%x", cmd);
 		retval = -ENOTTY;
 		break;
 	}
 
 done:
 	mutex_unlock(&pdx->mutex);
+	dbg("< %s(): -> %ld", __func__, retval);
 	return retval;
 }
 
