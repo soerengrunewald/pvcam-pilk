@@ -36,6 +36,10 @@
 #include <linux/mm.h>
 #include <linux/pci.h> //for scatterlist macros
 #include <linux/pagemap.h>
+#ifdef CONFIG_COMPAT
+#include <linux/compat.h>
+#endif
+
 #include "rspiusb.h"
 
 #ifdef CONFIG_USB_DEBUG
@@ -970,6 +974,16 @@ done:
 	return retval;
 }
 
+#ifdef CONFIG_COMPAT
+static long
+piusb_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+        return piusb_ioctl(filp, cmd, (unsigned long)compat_ptr(arg));
+}
+#else
+#define piusb_compat_ioctl NULL
+#endif /* CONFIG_COMPAT */
+
 static void piusb_delete(struct kref *kref)
 {
 	struct device_extension *pdx = to_pi_dev(kref);
@@ -1062,6 +1076,7 @@ static struct file_operations piusb_fops = {
 	 */
 	.owner =	THIS_MODULE,
 	.unlocked_ioctl = piusb_ioctl,
+	.compat_ioctl = piusb_compat_ioctl,
 	.open =		piusb_open,
 	.release =	piusb_release,
 };
