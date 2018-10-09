@@ -1076,7 +1076,7 @@ static struct usb_class_driver piusb_class = {
 };
 
 /* table of devices that work with this driver */
-static struct usb_device_id pi_device_table [] = {
+static const struct usb_device_id pi_device_table [] = {
 	{ USB_DEVICE( APA_VID, ST133_PID ) },
 	{ USB_DEVICE( APA_VID, PIXIS_PID ) },
 	{ }					/* Terminating entry */
