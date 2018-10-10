@@ -51,7 +51,7 @@ struct device_extension {
     int                     gotPixelData;
     int                     pendingWrite;
     char**                  pendedPixelUrbs;
-    unsigned char **		user_buffer;
+    __u32**                 user_buffer;
     int                     iama;           /*PIXIS or ST133 */
     int                     num_frames;     /* the number of frames that will fit in the user buffer */
     int                     active_frame;
@@ -63,12 +63,12 @@ struct device_extension {
 
 typedef struct IOCTL_STRUCT
 {
-    unsigned char       cmd;
-    unsigned long       numbytes;
-    unsigned char       dir;//1=out;0=in
-    int         endpoint;
-    int         numFrames;
-    unsigned char *     pData;
+    __u8  cmd;
+    __u32 numbytes;
+    __u8  dir;//1=out;0=in
+    __s32 endpoint;
+    __s32 numFrames;
+    __u32 data;
 } ioctl_struct;
 
 

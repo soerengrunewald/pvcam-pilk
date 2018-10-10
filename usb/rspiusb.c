@@ -93,7 +93,7 @@ static void piusb_write_bulk_callback(struct urb *urb)
  * bulk endpoints (eg: on the PIXIS 1 or 8). It asynchronous.
  * Returns the number of bytes written (sent).
  */
-static int piusb_write_bulk(ioctl_struct *io, unsigned char *uBuf, int len, struct device_extension *pdx)
+static int piusb_write_bulk(ioctl_struct *io, __u32 *uBuf, int len, struct device_extension *pdx)
 {
 	struct urb *urb = NULL;
 	int retval = 0;
@@ -267,7 +267,7 @@ static int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 	struct page **maplist_p;
 	int num_pages;
 	frameInfo = io->numFrames;
-	uaddr = (unsigned long) io->pData;
+	uaddr = (unsigned long) io->data;
 	numbytes = io->numbytes;
 
 	if (!pdx->PixelUrb)
@@ -557,7 +557,7 @@ static int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 	if (!pdx->PixelUrb)
 		return -EINVAL; // not initialized yet
 
-	pdx->user_buffer[f] = io->pData; // address of the user buffer, to copy it back
+	pdx->user_buffer[f] = &io->data; // address of the user buffer, to copy it back
 
 	if( pdx->iama == PIXIS_PID ) { //if so, which EP should we map this frame to
 		if( f % 2 )//check to see if this should use EP4(PONG)
@@ -569,7 +569,7 @@ static int MapUserBuffer(ioctl_struct *io, struct device_extension *pdx )
 		epAddr = pdx->hEP[0];
 		dbg("ST133 Frame #%d: EP=2",f );
 	}
-	dbg("UserAddress = %p", io->pData );
+	dbg("UserAddress = %p", &io->data );
 
 	buf_size = min((int)numbytes, MAX_BUFFER_SIZE);
 	numurb = numbytes / buf_size;
@@ -651,8 +651,8 @@ error:
 static int get_pixel_data(struct device_extension *pdx)
 {
 	struct urb **urbs = pdx->PixelUrb[pdx->active_frame];
-	unsigned char *to_buf = pdx->user_buffer[pdx->active_frame];
-	unsigned long numbytes;
+	__u32 *to_buf = pdx->user_buffer[pdx->active_frame];
+	__u32 numbytes;
 	int i, err;
 
 	if (!pdx->gotPixelData)
@@ -665,7 +665,7 @@ static int get_pixel_data(struct device_extension *pdx)
 		// we got all
 		//return err; /* error */
 		numbytes = pdx->frameSize;
-		dbg("pretending to return %lu bytes of data after err %d", numbytes, err);
+		dbg("pretending to return %u bytes of data after err %d", numbytes, err);
 		return numbytes;
 	}
 
@@ -698,7 +698,7 @@ static int get_pixel_data(struct device_extension *pdx)
 	}
 
 	pdx->active_frame = (pdx->active_frame + 1) % pdx->num_frames;
-	dbg("return %lu bytes of data", numbytes);
+	dbg("return %u bytes of data", numbytes);
 	return numbytes;
 }
 #endif
@@ -720,7 +720,7 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx, void 
 	// FIXME: why reading this data? is it sent? left-over from piusb_write_bulk()?
 	// -> no it is nessessary, cause ctrl->pData is a pointer from userspace and
 	//    we copied the pointer address with our first copy
-	if (copy_from_user(uBuf, ctrl->pData, numbytes)) {
+	if (copy_from_user(uBuf, &ctrl->data, numbytes)) {
 		dbg("copying ctrl->pData to uBuf failed");
 		kfree(uBuf);
 		return -EFAULT;
@@ -739,7 +739,7 @@ static int piusb_read_io(ioctl_struct *ctrl, struct device_extension *pdx, void 
 	}
 
 	dbg("EP Read %d bytes", numbytes);
-	if (copy_to_user(ctrl->pData, uBuf, numbytes)) {
+	if (copy_to_user(&ctrl->data, uBuf, numbytes)) {
 		dbg("copy_to_user failed");
 		kfree(uBuf);
 		return -EFAULT;
@@ -762,11 +762,11 @@ static void dump(const ioctl_struct *s)
 {
 	dbg("   ioctl: %p", s);
 	dbg("    +-- cmd:........ %d", s->cmd);
-	dbg("    +-- numbytes:... %lu", s->numbytes);
+	dbg("    +-- numbytes:... %u", s->numbytes);
 	dbg("    +-- dir:........ %d", s->dir);
 	dbg("    +-- endpoint:... %d", s->endpoint);
 	dbg("    +-- numFrames:.. %d", s->numFrames);
-	dbg("    +-- pData:...... %p", s->pData);
+	dbg("    +-- pData:...... %p", &s->data);
 }
 
 // TODO: add a piusb_compat_ioctl to support 32 bits calls on 64 bits. It's
@@ -838,9 +838,9 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case PIUSB_GETVNDCMD:
 		dbg("   * PIUSB_GETVNDCMD");
-		dbg("Get Vendor Command = %x, pData = %p", ctrl->cmd, ctrl->pData);
+		dbg("Get Vendor Command = %x, pData = %p", ctrl->cmd, &ctrl->data);
 		if (ctrl->numbytes != sizeof(devRB)) {
-			dev_err(&pdx->udev->dev, "GETVNDCMD numbytes should be 2, but is %lu\n",
+			dev_err(&pdx->udev->dev, "GETVNDCMD numbytes should be 2, but is %u\n",
 				ctrl->numbytes);
 			retval = -EINVAL;
 			goto done;
@@ -858,7 +858,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 
 	case PIUSB_SETVNDCMD:
 		dbg("   * PIUSB_SETVNDCMD");
-		retval = get_user(controlData, ctrl->pData);
+		retval = get_user(controlData, &ctrl->data);
 		if (retval < 0) {
 			pr_err("copy_from_user failed\n");
 			goto done;
@@ -870,7 +870,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 		// is that it's related to ctrl.pData (and it's possible to send no
 		// data at all, ie, *data=NULL) but for safety, keep sending null data.
 		if (ctrl->numbytes > ARRAY_SIZE(dummyCtlBuf)) {
-			dev_err(&pdx->udev->dev, "SETVNDCMD numbytes bigger than possible: %lu\n",
+			dev_err(&pdx->udev->dev, "SETVNDCMD numbytes bigger than possible: %u\n",
 				ctrl->numbytes);
 			retval = -EINVAL;
 			goto done;
@@ -891,7 +891,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 	case PIUSB_WRITEPIPE:
 		dbg("   * PIUSB_WRITEPIPE");
 		// TODO: shall we care about pendingWrite?
-		retval = piusb_write_bulk(ctrl, ctrl->pData, ctrl->numbytes, pdx);
+		retval = piusb_write_bulk(ctrl, &ctrl->data, ctrl->numbytes, pdx);
 		break;
 
 	case PIUSB_USERBUFFER:
@@ -952,7 +952,7 @@ static long piusb_ioctl (struct file *file, unsigned int cmd, unsigned long arg)
 			retval = -EINVAL;
 			goto done;
 		}
-		dbg("      setting frame size to %dx%lu", ctrl->numFrames, ctrl->numbytes);
+		dbg("      setting frame size to %dx%u", ctrl->numFrames, ctrl->numbytes);
 
 		if ((pdx->iama == PIXIS_PID) && (ctrl->numFrames % 2)) {
 			/*
